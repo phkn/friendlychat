@@ -51,16 +51,12 @@ exports.blurOffensiveImages = functions.storage.object().onChange(event => {
     return console.log('This is a deploy event.');
   }
 
-  var isMod = false; 
-  const messageId = object.name.split('/')[1];
-  var msgRef = admin.database().ref(`/messages/${messageId}`);
-  msgRef.once("value")
-  .then(function(snapshot) {
-    isMod = snapshot.hasChild("moderated");
-  });
+  // console.log(`CREATED: ${object.timeCreated}`);
+  // console.log(`UPDATED: ${object.updated}`);
 
-  if ( isMod ) {
-	return console.log("This was already moderated.");
+  if(! (object.timeCreated === object.updated) )
+  {
+    return console.log("Already processed this image.");
   }
 
   const bucket = gcs.bucket(object.bucket);
