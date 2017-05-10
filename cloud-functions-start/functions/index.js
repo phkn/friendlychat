@@ -73,6 +73,56 @@ exports.blurOffensiveImages = functions.storage.object().onChange(event => {
   });
 });
 
+exports.labelImages = functions.storage.object().onChange(event => {
+  const object = event.data;
+  // Exit if this is a deletion or a deploy event.
+  if (object.resourceState === 'not_exists') {
+    return console.log('labelImages: This is a deletion event.');
+  } else if (!object.name) {
+    return console.log('labelImages: This is a deploy event.');
+  }
+
+  if(! (object.timeCreated === object.updated) )
+  {
+    return console.log("Already processed this image.");
+  }
+
+  const bucket = gcs.bucket(object.bucket);
+  const file = bucket.file(object.name);
+
+  console.log('Labeling image:');
+  // PK: let's try and label them, too. 
+  vision.detectLabels(file)
+    .then((results) => {
+      const labels = results[0];
+      console.warn("LABELS: "+labels);
+    })
+    .catch((err) => {
+      console.error('ERROR:', err);
+    });
+
+   vision.detectSimilar(file)
+    .then((results) => {
+      const webDetection = results[1].responses[0].webDetection;
+
+      if (webDetection.webEntities.length) {
+        console.log(`Web entities found: ${webDetection.webEntities.length}`);
+        webDetection.webEntities.forEach((webEntity) => {
+          console.log(` ... ${webEntity.description} = ${webEntity.score}`);
+        });
+        var bestEntityDesc = "IDK";
+        bestEntity = webDetection.webEntities.reduce(function(a, b){ return a.score > b.score ? a : b });
+        bestEntityDesc = bestEntity.description;
+    console.warn(`BEST ONE: ${bestEntityDesc}`);
+      }
+    })
+  .catch((err) => {
+    console.error('ERROR:', err);
+  });  
+
+});
+
+
 // Blurs the given image located in the given bucket using ImageMagick.
 function blurImage(filePath, bucket, metadata) {
   const fileName = filePath.split('/').pop();
