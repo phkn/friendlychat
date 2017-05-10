@@ -42,7 +42,8 @@ exports.addWelcomeMessages = functions.auth.user().onCreate(event => {
 });
 
 // Blurs uploaded images that are flagged as Adult or Violence.
-exports.blurOffensiveImages = functions.storage.object().onChange(event => {
+// Also labels things for what we thought they were.
+exports.doMlTasksForImages = functions.storage.object().onChange(event => {
   const object = event.data;
   // Exit if this is a deletion or a deploy event.
   if (object.resourceState === 'not_exists') {
@@ -62,46 +63,22 @@ exports.blurOffensiveImages = functions.storage.object().onChange(event => {
   const bucket = gcs.bucket(object.bucket);
   const file = bucket.file(object.name);
 
-  // Check the image content using the Cloud Vision API.
-  return vision.detectSafeSearch(file).then(safeSearchResult => {
-    if (safeSearchResult[0].adult || safeSearchResult[0].violence) {
-      console.log('The image', object.name, 'has been detected as inappropriate.');
-      return blurImage(object.name, bucket);
-    } else {
-      console.log('The image', object.name,'has been detected as OK.');
-    }
-  });
-});
+  // var labels = [ "idk" ];
 
-exports.labelImages = functions.storage.object().onChange(event => {
-  const object = event.data;
-  // Exit if this is a deletion or a deploy event.
-  if (object.resourceState === 'not_exists') {
-    return console.log('labelImages: This is a deletion event.');
-  } else if (!object.name) {
-    return console.log('labelImages: This is a deploy event.');
-  }
+  // console.log('Labeling image:');
+  // // PK: let's try and label them, too. 
+  // vision.detectLabels(file)
+  //   .then((results) => {
+  //     labels = results[0];
+  //     console.warn("LABELS: "+labels);
+  //   })
+  //   .catch((err) => {
+  //     console.error('ERROR:', err);
+  //   });
 
-  if(! (object.timeCreated === object.updated) )
-  {
-    return console.log("Already processed this image.");
-  }
 
-  const bucket = gcs.bucket(object.bucket);
-  const file = bucket.file(object.name);
-
-  console.log('Labeling image:');
-  // PK: let's try and label them, too. 
-  vision.detectLabels(file)
-    .then((results) => {
-      const labels = results[0];
-      console.warn("LABELS: "+labels);
-    })
-    .catch((err) => {
-      console.error('ERROR:', err);
-    });
-
-   vision.detectSimilar(file)
+  console.log('Detecting Similar/Entities:');
+  vision.detectSimilar(file)
     .then((results) => {
       const webDetection = results[1].responses[0].webDetection;
 
@@ -113,12 +90,43 @@ exports.labelImages = functions.storage.object().onChange(event => {
         var bestEntityDesc = "IDK";
         bestEntity = webDetection.webEntities.reduce(function(a, b){ return a.score > b.score ? a : b });
         bestEntityDesc = bestEntity.description;
-    console.warn(`BEST ONE: ${bestEntityDesc}`);
+
+
+        console.warn(`ENTITY: ${bestEntityDesc}`);
+
+        admin.database().ref('messages').push({
+          name: 'Firebase Bot',
+          photoUrl: '/images/firebase-logo.png', // Firebase logo
+          text: `That looks like a ${bestEntityDesc} to me!`
+        });
+
       }
     })
   .catch((err) => {
     console.error('ERROR:', err);
-  });  
+  });
+
+
+
+  console.log('Safety checking image:');
+
+  // Check the image content using the Cloud Vision API.
+  return vision.detectSafeSearch(file).then(safeSearchResult => {
+    if (safeSearchResult[0].adult || safeSearchResult[0].violence) {
+      console.log('BAD!', object.name);
+      admin.database().ref('messages').push({
+        name: 'Firebase Bot',
+        photoUrl: '/images/firebase-logo.png', // Firebase logo
+        text: `I don't like that image.  BAD!`
+      });
+
+      return blurImage(object.name, bucket);
+    } else {
+      console.log('GOOD!', object.name);
+    }
+  });
+
+
 
 });
 
