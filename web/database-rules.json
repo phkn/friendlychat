@@ -2,7 +2,7 @@
   "rules": {
     "messages": {
       ".read": "auth !== null",
-      ".write": "auth !== null"
+      ".write": "auth !== null && auth.token.email.matches(/.*@google.com$/)"
     },
     "fcmTokens": {
       "$token": {
