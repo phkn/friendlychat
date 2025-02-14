@@ -19,9 +19,12 @@ const functions = require('firebase-functions');
 // Import and initialize the Firebase Admin SDK.
 const admin = require('firebase-admin');
 admin.initializeApp(functions.config().firebase);
+
 const gcs = require('@google-cloud/storage')();
 const vision = require('@google-cloud/vision')();
 const exec = require('child-process-promise').exec;
+
+// TODO(DEVELOPER): Import the Cloud Functions for Firebase and the Firebase Admin modules here.
 
 // Adds a message that welcomes new users into the chat.
 exports.addWelcomeMessages = functions.auth.user().onCreate(event => {
@@ -38,8 +41,9 @@ exports.addWelcomeMessages = functions.auth.user().onCreate(event => {
   });
 });
 
-// Checks if uploaded images are flagged as Adult or Violence and if so blurs them.
-exports.blurOffensiveImages = functions.storage.object().onChange(event => {
+// Blurs uploaded images that are flagged as Adult or Violence.
+// Also labels things for what we thought they were.
+exports.doMlTasksForImages = functions.storage.object().onChange(event => {
   const object = event.data;
   // Exit if this is a deletion or a deploy event.
   if (object.resourceState === 'not_exists') {
@@ -48,43 +52,108 @@ exports.blurOffensiveImages = functions.storage.object().onChange(event => {
     return console.log('This is a deploy event.');
   }
 
+  // console.log(`CREATED: ${object.timeCreated}`);
+  // console.log(`UPDATED: ${object.updated}`);
+
+  if(! (object.timeCreated === object.updated) )
+  {
+    return console.log("Already processed this image.");
+  }
+
   const bucket = gcs.bucket(object.bucket);
   const file = bucket.file(object.name);
+
+  // var labels = [ "idk" ];
+
+  // console.log('Labeling image:');
+  // // PK: let's try and label them, too. 
+  // vision.detectLabels(file)
+  //   .then((results) => {
+  //     labels = results[0];
+  //     console.warn("LABELS: "+labels);
+  //   })
+  //   .catch((err) => {
+  //     console.error('ERROR:', err);
+  //   });
+
+
+  console.log('Detecting Similar/Entities:');
+  vision.detectSimilar(file)
+    .then((results) => {
+      const webDetection = results[1].responses[0].webDetection;
+
+      if (webDetection.webEntities.length) {
+        console.log(`Web entities found: ${webDetection.webEntities.length}`);
+        webDetection.webEntities.forEach((webEntity) => {
+          console.log(` ... ${webEntity.description} = ${webEntity.score}`);
+        });
+        var bestEntityDesc = "IDK";
+        bestEntity = webDetection.webEntities.reduce(function(a, b){ return a.score > b.score ? a : b });
+        bestEntityDesc = bestEntity.description;
+
+
+        console.warn(`ENTITY: ${bestEntityDesc}`);
+
+        admin.database().ref('messages').push({
+          name: 'Firebase Bot',
+          photoUrl: '/images/firebase-logo.png', // Firebase logo
+          text: `That looks like a ${bestEntityDesc} to me!`
+        });
+
+      }
+    })
+  .catch((err) => {
+    console.error('ERROR:', err);
+  });
+
+
+
+  console.log('Safety checking image:');
 
   // Check the image content using the Cloud Vision API.
   return vision.detectSafeSearch(file).then(safeSearchResult => {
     if (safeSearchResult[0].adult || safeSearchResult[0].violence) {
-      console.log('The image', object.name, 'has been detected as inappropriate.');
+      console.log('BAD!', object.name);
+      admin.database().ref('messages').push({
+        name: 'Firebase Bot',
+        photoUrl: '/images/firebase-logo.png', // Firebase logo
+        text: `I don't like that image.  BAD!`
+      });
+
       return blurImage(object.name, bucket);
     } else {
-      console.log('The image', object.name,'has been detected as OK.');
+      console.log('GOOD!', object.name);
     }
   });
+
+
+
 });
 
+
 // Blurs the given image located in the given bucket using ImageMagick.
-function blurImage(filePath, bucket) {
+function blurImage(filePath, bucket, metadata) {
   const fileName = filePath.split('/').pop();
   const tempLocalFile = `/tmp/${fileName}`;
   const messageId = filePath.split('/')[1];
 
   // Download file from bucket.
   return bucket.file(filePath).download({destination: tempLocalFile})
-      .then(() => {
-        console.log('Image has been downloaded to', tempLocalFile);
-        // Blur the image using ImageMagick.
-        return exec(`convert ${tempLocalFile} -channel RGBA -blur 0x24 ${tempLocalFile}`);
-      }).then(() => {
-        console.log('Image has been blurred');
-        // Uploading the Blurred image back into the bucket.
-        return bucket.upload(tempLocalFile, {destination: filePath});
-      }).then(() => {
-        console.log('Blurred image has been uploaded to', filePath);
-        // Indicate that the message has been moderated.
-        return admin.database().ref(`/messages/${messageId}`).update({moderated: true});
-      }).then(() => {
-        console.log('Marked the image as moderated in the database.');
-      });
+    .then(() => {
+      console.log('Image has been downloaded to', tempLocalFile);
+      // Blur the image using ImageMagick.
+      return exec(`convert ${tempLocalFile} -channel RGBA -blur 0x24 ${tempLocalFile}`);
+    }).then(() => {
+      console.log('Image has been blurred');
+      // Uploading the Blurred image back into the bucket.
+      return bucket.upload(tempLocalFile, {destination: filePath});
+    }).then(() => {
+      console.log('Blurred image has been uploaded to', filePath);
+      // Indicate that the message has been moderated.
+      return admin.database().ref(`/messages/${messageId}`).update({moderated: true});
+    }).then(() => {
+      console.log('Marked the image as moderated in the database.');
+    });
 }
 
 // Sends a notifications to all users when a new message is posted.
@@ -132,3 +201,4 @@ exports.sendNotifications = functions.database.ref('/messages/{messageId}').onWr
     }
   });
 });
+
